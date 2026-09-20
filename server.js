@@ -1,84 +1,86 @@
 const express = require('express');
-const bodyParser = require('body-parser');
+const cors = require('cors');
+const admin = require('firebase-admin');
 const axios = require('axios');
+
 const app = express();
-app.use(bodyParser.json());
+app.use(cors());
+app.use(express.json());
 
-let db=null; let fbStatus="Not init"; let projectId="unknown";
-try{
-  let keyStr = process.env.FIREBASE_KEY || "";
-  let t = keyStr.trim();
-  if(!t.startsWith("{")) t = Buffer.from(t, 'base64').toString('utf-8');
-  const parsed = JSON.parse(t.trim());
-  projectId = parsed.project_id;
-  const admin = require("firebase-admin");
-  if(!admin.apps.length) admin.initializeApp({credential: admin.credential.cert(parsed)});
-  db = admin.firestore();
-  fbStatus="OK"; 
-  console.log("Firebase OK Project:", projectId);
-}catch(e){ fbStatus=e.message; console.log("Firebase Fail:", e.message); }
+// Firebase
+let db = null;
+try {
+  if(process.env.FIREBASE_SERVICE_ACCOUNT){
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    db = admin.firestore();
+    console.log("Firebase Connected");
+  }
+} catch(e){ console.log("Firebase Error", e.message); }
 
-const PHONE_ID = process.env.PHONE_NUMBER_ID || "1316526978211496";
-const TOKEN = process.env.WHATSAPP_TOKEN;
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "ezi123";
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "1316526978211496";
 
-async function sendBusyAvailable(phone,name,workerId){
-  return axios.post(`https://graph.facebook.com/v22.0/${PHONE_ID}/messages`,{
-    messaging_product:"whatsapp",
-    to: phone,
-    type:"interactive",
-    interactive:{
-      type:"button",
-      body:{text:`Hi ${name}! Ezi Services\nAre you Busy or Available today?`},
-      action:{buttons:[
-        {type:"reply", reply:{id:`available_${workerId}`, title:"✅ Available"}},
-        {type:"reply", reply:{id:`busy_${workerId}`, title:"❌ Busy"}}
-      ]}
-    }
-  },{headers:{Authorization:`Bearer ${TOKEN}`}});
-}
+app.get('/', (req,res)=> res.send('Running OK - ezi-services-d4d68'));
 
-app.get('/', (req,res)=> res.send(`Running OK - Project: ${projectId} - FB: ${fbStatus}`));
-
-app.get('/add-my-worker', async (req,res)=>{
-  try{
-    await db.collection("workers").doc("EeIINIAVJQTyUfbqOsMm").set({
-      name: "Test Worker",
-      phone: "917206580660",
-      skill: "Home Repair",
-      category: "Home Repair",
-      status: "active"
-    });
-    const snap = await db.collection("workers").get();
-    res.send(`Worker Added! Project: ${projectId}, Total now: ${snap.size}`);
-  }catch(e){ res.send("Add Error: "+e.message); }
+ // === YAHI MISSING THA - ISILYE CANNOT GET AA RAHA THA ===
+app.get('/webhook', (req,res)=>{
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if(mode && token && mode === 'subscribe' && token === VERIFY_TOKEN){
+    console.log("WEBHOOK VERIFIED!");
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
 });
 
+app.post('/webhook', async (req,res)=>{
+  try{
+    const value = req.body.entry?.[0]?.changes?.[0]?.value;
+    const message = value?.messages?.[0];
+    const buttonId = message?.interactive?.button_reply?.id || message?.button?.payload;
+    if(buttonId && db){
+      const [status, docId] = buttonId.split("_");
+      await db.collection("workers").doc(docId).update({
+        availability: status === "available"? "Available" : "Busy",
+        isAvailable: status === "available",
+        lastUpdated: new Date()
+      });
+      console.log(`Updated ${docId} -> ${status}`);
+    }
+  }catch(e){ console.log("Webhook POST Error", e.message); }
+  res.sendStatus(200);
+});
+
+// Daily send
 app.get('/send-daily', async (req,res)=>{
   try{
-    const snap = await db.collection("workers").get();
-    console.log("Total workers found:", snap.size);
-    let count=0;
-    let lastError = "No error";
-    for(let doc of snap.docs){
-      let w=doc.data();
-      let phone=(w.phone||"").toString().replace(/\D/g,'');
-      if(phone.length===10) phone="91"+phone;
-      console.log("Sending to:", phone);
-      try{
-        if(phone.length>=12){
-          await sendBusyAvailable(phone, w.name||"Worker", doc.id);
-          count++;
+    const snapshot = await db.collection("workers").get();
+    let count = 0;
+    for(const doc of snapshot.docs){
+      const w = doc.data();
+      let phone = (w.phone || "").replace(/\D/g,'');
+      if(phone.length===10) phone = "91"+phone;
+      if(!phone) continue;
+      await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, {
+        messaging_product: "whatsapp", to: phone,
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text: `Hi ${w.name || 'Worker'}! Aaj available ho?` },
+          action: { buttons: [
+            { type: "reply", reply: { id: `available_${doc.id}`, title: "✅ Available" } },
+            { type: "reply", reply: { id: `busy_${doc.id}`, title: "❌ Busy" } }
+          ]}
         }
-      } catch(e){
-        lastError = e.response ? JSON.stringify(e.response.data) : e.message;
-        console.log("WhatsApp Error:", lastError);
-      }
+      }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } });
+      count++;
     }
-    res.send(`Daily Sent ${count} messages, Total: ${snap.size}, Project: ${projectId}, Last Error: ${lastError}`);
-  }catch(e){ 
-    console.log("Main Error:", e.message);
-    res.send("Error: "+e.message); 
-  }
+    res.send(`Daily Sent ${count}`);
+  }catch(e){ console.log(e.response?.data || e.message); res.status(500).send(e.message); }
 });
 
-app.listen(process.env.PORT||10000, ()=>console.log("Server running"));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, ()=> console.log("Server on "+PORT));
