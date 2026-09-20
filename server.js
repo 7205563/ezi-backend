@@ -56,18 +56,29 @@ app.get('/add-my-worker', async (req,res)=>{
 app.get('/send-daily', async (req,res)=>{
   try{
     const snap = await db.collection("workers").get();
+    console.log("Total workers found:", snap.size);
     let count=0;
+    let lastError = "No error";
     for(let doc of snap.docs){
       let w=doc.data();
       let phone=(w.phone||"").toString().replace(/\D/g,'');
       if(phone.length===10) phone="91"+phone;
-      if(phone.length>=12){
-        await sendBusyAvailable(phone, w.name||"Worker", doc.id);
-        count++;
+      console.log("Sending to:", phone);
+      try{
+        if(phone.length>=12){
+          await sendBusyAvailable(phone, w.name||"Worker", doc.id);
+          count++;
+        }
+      } catch(e){
+        lastError = e.response ? JSON.stringify(e.response.data) : e.message;
+        console.log("WhatsApp Error:", lastError);
       }
     }
-    res.send(`Daily Sent ${count} messages, DB:${fbStatus} - Total workers in DB: ${snap.size} - Project: ${projectId}`);
-  }catch(e){ res.send("Error: "+e.message); }
+    res.send(`Daily Sent ${count} messages, Total: ${snap.size}, Project: ${projectId}, Last Error: ${lastError}`);
+  }catch(e){ 
+    console.log("Main Error:", e.message);
+    res.send("Error: "+e.message); 
+  }
 });
 
 app.listen(process.env.PORT||10000, ()=>console.log("Server running"));
