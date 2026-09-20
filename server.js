@@ -10,8 +10,9 @@ app.use(express.json());
 // Firebase
 let db = null;
 try {
-  if(process.env.FIREBASE_SERVICE_ACCOUNT){
-    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+ const fbKey = process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FIREBASE_KEY;
+if(fbKey){
+    const serviceAccount = JSON.parse(fbKey);
     admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
     db = admin.firestore();
     console.log("Firebase Connected");
@@ -19,7 +20,7 @@ try {
 } catch(e){ console.log("Firebase Error", e.message); }
 
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "ezi123";
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || process.env.ACCESS_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "1316526978211496";
 
 app.get('/', (req,res)=> res.send('Running OK - ezi-services-d4d68'));
