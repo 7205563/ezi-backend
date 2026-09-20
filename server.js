@@ -7,13 +7,21 @@ app.use(cors());
 app.use(express.json());
 
 let db = null;
+let fbError = "not tried";
 try {
-  const raw = process.env.FIREBASE_KEY;
+  let raw = process.env.FIREBASE_KEY || "";
+  raw = raw.trim();
+  // try base64 first if it doesn't start with {
+  if (!raw.startsWith('{')) {
+    try { raw = Buffer.from(raw, 'base64').toString('utf8'); } catch {}
+  }
   const serviceAccount = JSON.parse(raw);
   if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
   db = admin.firestore();
+  fbError = "OK";
   console.log("Firebase OK ✅");
 } catch (e) {
+  fbError = e.message;
   console.log("Firebase Init Failed:", e.message);
 }
 
@@ -32,8 +40,9 @@ app.post('/webhook', async (req, res) => {
       console.log(`FROM: ${from} BTN: ${btn}`);
       const isAvail = btn.toLowerCase().includes('available') &&!btn.toLowerCase().includes('not');
       await db.collection('workers').doc(from).set({ phone: from, isAvailable: isAvail, lastUpdated: new Date() }, { merge: true });
-    }
-  } catch (e) { console.log(e.message); }
+      console.log("Firestore saved");
+    } else console.log("No DB or No Msg. DB:",!!db);
+  } catch (e) { console.log("Webhook err", e.message); }
   res.sendStatus(200);
 });
 
@@ -45,9 +54,9 @@ app.get('/send-daily', async (req, res) => {
       type: "interactive",
       interactive: { type: "button", body: { text: "Hi 👋 Are you Available today?" }, action: { buttons: [{ type: "reply", reply: { id: "yes", title: "✅ Available" } }, { type: "reply", reply: { id: "no", title: "❌ Not Available" } }] } }
     }, { headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` } });
-    res.send("Sent OK DB:" + (db? "OK" : "FAIL"));
+    res.send(`Sent OK DB:${db?"OK":"FAIL"} Error:${fbError}`);
   } catch (e) { res.send(JSON.stringify(e.response?.data || e.message)); }
 });
 
-app.get('/', (req,res)=>res.send("Live DB:"+(db?"OK":"FAIL")));
+app.get('/', (req,res)=>res.send(`Live DB:${db?"OK":"FAIL"} Err:${fbError}`));
 app.listen(10000, ()=>console.log("Live 10000"));
