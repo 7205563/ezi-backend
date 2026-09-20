@@ -10,9 +10,16 @@ app.use(express.json());
 // Firebase
 let db = null;
 try {
- const fbKey = process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FIREBASE_KEY;
-if(fbKey){
-    const serviceAccount = JSON.parse(fbKey);
+  const fbRaw = process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FIREBASE_KEY;
+  if(fbRaw){
+    let jsonStr = fbRaw;
+    try {
+      JSON.parse(jsonStr); // check if direct JSON hai
+    } catch(e) {
+      // agar direct JSON nahi hai to Base64 decode karo
+      jsonStr = Buffer.from(fbRaw, 'base64').toString('utf-8');
+    }
+    const serviceAccount = JSON.parse(jsonStr);
     admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
     db = admin.firestore();
     console.log("Firebase Connected");
