@@ -160,3 +160,5 @@ cron.schedule('30 3 * * *', () => {
     }
   });
 });
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log("Live on " + PORT));
