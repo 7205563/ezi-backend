@@ -7,13 +7,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.set('trust proxy', true);
+app.get("/", (req, res) => {
+  res.send("Ezi Backend Live hai ✅");
+});
 
 let users = {}; // phone -> {otp, city}
 let requirements = [];
 let workers = [{ id: 1, name: "Test Worker", phone: "919999999999", city: "Panipat", serviceType: "Home Repair", isAvailable: true, lastUpdate: Date.now() }];
 
 const WHATSAPP_PHONE_ID = "1316526978211496";
-const WHATSAPP_TOKEN = "TUMHARA_TOKEN_YAHA_DALO";
+const WHATSAPP_TOKEN = "EAAesfw1WmawBStoaRvMU5jHW8thqAqFfUkZAFfNkYZCT9fKQVYhmLSJAxdZAMHs47FkGGf7E8NMKUq3HqMezBb0IckFFkUcSNVoDVQOcn8Fw6M5EM2ka8ZBHR55wtENWagJZAVxZB7WRJYOSZBwVWBLUB7ZAeoI8nJpgwGnDjJZABKvuDDakoZA56F9Oatj8FqAJiYQgZAMj4czwDKBScRe95dzuCSprZBW6hcAvaWawwNhXZCxupyzNbUruWsq5KYB42dyNOG2AZCeZBPI1UoYortMLnWZBPCRRQCOHr6meTAZDZD";
 
 async function sendMessage(to, text, buttons) {
   try {
