@@ -13,7 +13,8 @@ try{
   const admin=require("firebase-admin");
   admin.initializeApp({credential:admin.credential.cert(parsed)});
   db=admin.firestore(); fbError="OK";
-  console.log("Firebase OK ✅");
+  console.log("Firebase OK ✅ Project:", parsed.project_id);
+  console.log("DB URL project:", parsed.project_id);
 }catch(e){ fbError=e.message; console.log("Firebase Fail:",e.message); }
 
 const PHONE_ID=process.env.WHATSAPP_PHONE_ID||"1316526978211496";
