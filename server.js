@@ -40,19 +40,27 @@ async function sendBusyAvailable(phone,name,workerId){
 
 app.get('/',(req,res)=> res.send(`Ezi Backend Live | DB:${fbError} | LEN:${(process.env.FIREBASE_KEY||'').length} | TOKEN:${TOKEN?"YES":"NO"}`));
 
-app.get('/send-daily',async(req,res)=>{
-  if(!db) return res.send("DB not ready: "+fbError);
-  if(!TOKEN) return res.send("TOKEN missing - Render me WHATSAPP_TOKEN add kar");
-  const snap=await db.collection("workers").get();
-  let c=0;
-  for(const doc of snap.docs){
-    const w=doc.data();
-    if(w.serviceType==="Home Repair" || !w.serviceType){
-      await sendBusyAvailable(w.phone||w.mobile||w.number, w.name||"Worker", w.id||doc.id);
-      c++;
+app.get('/send-daily', async (req,res)=>{
+  try{
+    const snap = await db.collection("workers").get();
+    console.log("Total workers found:", snap.size);
+    let count=0;
+    for(let doc of snap.docs){
+      let w = doc.data();
+      // Home Repair category check
+      if(w.skill === "Home Repair" || w.category === "Home Repair" || w.serviceType === "Home Repair"){
+        let phone = (w.phone||"").toString().replace(/\D/g,'');
+        if(phone.length===10) phone="91"+phone;
+        console.log("Sending to:", phone, w.name);
+        await sendBusyAvailable(phone, w.name||"Worker", doc.id);
+        count++;
+      }
     }
+    res.send(`Daily Sent ${count} messages, DB:OK - Total workers in DB: ${snap.size}`);
+  }catch(e){
+    console.log(e);
+    res.send("Error: "+e.message);
   }
-  res.send(`Daily Sent ${c} messages, DB:${fbError}`);
 });
 
 app.listen(process.env.PORT||10000,()=>console.log('Live'));
