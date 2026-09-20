@@ -10,7 +10,7 @@ app.use(bodyParser.json());
 // --- CONFIG ---
 const VERIFY_TOKEN = "ezi123";
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN; // Render > Environment me daal
-const PHONE_NUMBER_ID = "810914716515743"; // Tera Phone Number ID
+const PHONE_NUMBER_ID = "1316526978211496"; // Tera Phone Number ID
 const FIRESTORE_SERVICE_ACCOUNT = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
 
 if (Object.keys(FIRESTORE_SERVICE_ACCOUNT).length > 0) {
