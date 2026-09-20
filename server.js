@@ -1,94 +1,94 @@
-const express = require("express");
-const admin = require("firebase-admin");
-const axios = require("axios");
+const express = require('express');
+const bodyParser = require('body-parser');
+const admin = require('firebase-admin');
+const axios = require('axios');
+
 const app = express();
+app.use(bodyParser.json());
 
-app.use(express.json());
+// Firebase
+const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+const db = admin.firestore();
 
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "ezi123";
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || process.env.ACCESS_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "1316526978211496";
+const VERIFY_TOKEN = "ezi123";
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 
-// Firebase - dono naam aur base64 support
-let db = null;
-try {
-  const fbRaw = process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FIREBASE_KEY;
-  if(fbRaw){
-    let jsonStr = fbRaw.trim();
-    try { JSON.parse(jsonStr); }
-    catch(e) { jsonStr = Buffer.from(jsonStr, 'base64').toString('utf-8'); }
-    const serviceAccount = JSON.parse(jsonStr);
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-    db = admin.firestore();
-    console.log("Firebase Connected");
+app.get('/', (req,res)=> res.send('Ezi Backend Live'));
+
+// Webhook Verify
+app.get('/webhook', (req,res)=>{
+  if(req.query['hub.verify_token'] === VERIFY_TOKEN){
+    res.send(req.query['hub.challenge']);
+  } else {
+    res.sendStatus(403);
   }
-} catch(e){ console.log("Firebase Error", e.message); }
-
-app.get("/", (req,res) => res.send("Ezi Backend Live"));
-
-app.get("/webhook", (req,res) => {
-  if(req.query["hub.verify_token"] === VERIFY_TOKEN){
-    res.send(req.query["hub.challenge"]);
-  } else res.sendStatus(403);
 });
 
-app.post("/webhook", async (req,res) => {
-  try {
-    console.log("WEBHOOK AAYA:", JSON.stringify(req.body).substring(0,500));
+// Webhook Receive - BUTTON CLICK
+app.post('/webhook', async (req,res)=>{
+  console.log("WEBHOOK AAYA:", JSON.stringify(req.body).substring(0,500));
+  try{
     const entry = req.body.entry?.[0];
-    const change = entry?.changes?.[0];
-    const value = change?.value;
-    const msg = value?.messages?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const messages = value?.messages;
+    if(messages && messages[0]){
+      const msg = messages[0];
+      const from = msg.from; // worker phone
+      let reply = "";
+      if(msg.button && msg.button.text) reply = msg.button.text;
+      if(msg.interactive && msg.interactive.button_reply) reply = msg.interactive.button_reply.title;
 
-    if(msg){
-      const from = msg.from;
-      const buttonId = msg.interactive?.button_reply?.id || msg.button?.payload || msg.interactive?.button_reply?.title;
-      console.log(`From: ${from}, Button: ${buttonId}`);
+      console.log(`From: ${from} Button: ${reply}`);
 
-      if(buttonId && db){
-        let status = buttonId.toLowerCase().includes("not") || buttonId.toLowerCase().includes("busy")? "Busy" : "Available";
-        // workers collection me phone se dhoond ke update
-        const snap = await db.collection("workers").where("phone","==", from).get();
-        if(!snap.empty){
-          for(const doc of snap.docs){
-            await doc.ref.update({ availability: status, isAvailable: status === "Available", lastUpdate: new Date().toISOString() });
-            console.log(`Updated ${doc.id} -> ${status}`);
-          }
-        } else {
-          // agar +91 ke bina hai to +91 add karke try
-          const snap2 = await db.collection("workers").where("phone","==", from.replace("91","")).get();
-          console.log("Retry snap2 size:", snap2.size);
-        }
+      // Find worker and update
+      const workers = await db.collection('workers').where('phone','==',from).get();
+      if(!workers.empty){
+        let availability = reply.toLowerCase().includes('avail')? 'Available' : 'Busy';
+        await workers.docs[0].ref.update({
+          availability: availability,
+          isAvailable: availability === 'Available',
+          lastUpdated: new Date()
+        });
+        console.log(`Updated ${from} to ${availability}`);
       }
     }
-    res.sendStatus(200);
-  } catch(e){ console.log("Webhook Error", e.message); res.sendStatus(200); }
+  }catch(e){ console.log("Error:", e.message); }
+  res.sendStatus(200);
 });
 
-app.get("/send-daily", async (req,res) => {
+// Check Availability - Sends WhatsApp to all workers
+app.get('/check-availability', async (req,res)=>{
   try{
-    const snapshot = await db.collection("workers").get();
-    let count = 0;
-    for(const doc of snapshot.docs){
+    const workersSnap = await db.collection('workers').get();
+    for(const doc of workersSnap.docs){
       const w = doc.data();
-      let phone = w.phone;
-      if(!phone) continue;
-      if(!phone.startsWith("91")) phone = "91"+phone;
-
-      await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`, {
-        messaging_product: "whatsapp",
-        to: phone,
-        type: "interactive",
-        interactive: {
-          type: "button",
-          body: { text: `Hi ${w.name || 'Worker'}! Aaj available ho?` },
-          action: { buttons: [{type:"reply", reply:{id:"available", title:"✅ Available"}}, {type:"reply", reply:{id:"not_available", title:"❌ Busy"}}] }
+      if(!w.phone) continue;
+      await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,{
+        messaging_product:"whatsapp",
+        to: w.phone,
+        type:"interactive",
+        interactive:{
+          type:"button",
+          body:{ text:`Hi ${w.name || 'Test Worker'}! Aaj available ho?` },
+          action:{ buttons:[
+            {type:"reply", reply:{id:"avail_yes", title:"✅ Available"}},
+            {type:"reply", reply:{id:"avail_no", title:"❌ Busy"}}
+          ]}
         }
-      }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, "Content-Type":"application/json" } });
-      count++;
+      },{
+        headers:{ Authorization:`Bearer ${WHATSAPP_TOKEN}`, 'Content-Type':'application/json' }
+      });
     }
-    res.send(`Daily Sent ${count}`);
-  } catch(e){ res.status(500).send(e.message); }
+    res.send("Messages sent to all workers");
+  }catch(e){
+    console.log(e.response?.data || e.message);
+    res.status(500).send(e.message);
+  }
 });
 
-app.listen(process.env.PORT || 10000, ()=> console.log("Server on 10000"));
+app.listen(10000, ()=> console.log("Server on 10000"));
