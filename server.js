@@ -10,144 +10,111 @@ app.set('trust proxy', true);
 
 let users = {}; // phone -> {otp, city}
 let requirements = [];
-let workers = [{ id: 1, name: "Test Worker", phone: "919999999999", city: "Ferozepur-Jhirka", isAvailable: true }];
+let workers = [{ id: 1, name: "Test Worker", phone: "919999999999", city: "Panipat", serviceType: "Home Repair", isAvailable: true, lastUpdate: Date.now() }];
+
+const WHATSAPP_PHONE_ID = "1316526978211496";
+const WHATSAPP_TOKEN = "TUMHARA_TOKEN_YAHA_DALO";
 
 async function sendMessage(to, text, buttons) {
-  console.log(`WhatsApp to ${to}: ${text}`);
-  // Yaha tera WhatsApp API call ayega
-}
-
-// City nikalne ka function - GPS + IP
-async function getCityFromLatLon(lat, lon) {
   try {
-    const geo = await axios.get(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`, {
-      headers: { 'User-Agent': 'EziApp/2.0' }
+    let data;
+    if (buttons && buttons.length > 0) {
+      // Interactive button - Available / Busy / Yes / No
+      data = {
+        messaging_product: "whatsapp",
+        to: to,
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text: text },
+          action: { buttons: buttons.map(b => ({ type: "reply", reply: { id: b.id, title: b.title } })) }
+        }
+      };
+    } else {
+      data = {
+        messaging_product: "whatsapp",
+        to: to,
+        type: "text",
+        text: { body: text }
+      };
+    }
+    await axios.post(`https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_ID}/messages`, data, {
+      headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, "Content-Type": "application/json" }
     });
-    const addr = geo.data.address;
-    return addr.city || addr.town || addr.village || addr.block || addr.county || "Unknown";
-  } catch (e) { return null; }
+    console.log(`Sent to ${to}`);
+  } catch (e) { console.log(e.response?.data || e.message); }
 }
 
-async function getCityFromIP(ip) {
-  try {
-    if (ip === "::1" || ip === "127.0.0.1" || ip.includes("::ffff:")) return "Ferozepur-Jhirka";
-    const res = await axios.get(`http://ip-api.com/json/${ip}?fields=city`);
-    return res.data.city || "Unknown";
-  } catch (e) { return "Unknown"; }
-}
+// 1. Login OTP
+app.post("/send-otp", async (req, res) => {
+  const { phone } = req.body;
+  const otp = Math.floor(1000 + Math.random() * 9000);
+  users[phone] = { otp, city: users[phone]?.city || "Panipat" };
+  await sendMessage(`91${phone}`, `Ezi Services OTP: ${otp}`);
+  res.json({ success: true });
+});
 
-app.get('/', (req, res) => res.send('Ezi Backend V2 LIVE - All India City Support'));
+// Webhook verify
+app.get("/webhook", (req, res) => {
+  if (req.query["hub.verify_token"] === "ezi123") res.send(req.query["hub.challenge"]);
+  else res.sendStatus(403);
+});
 
-// --- CITY API ---
-app.get('/get-city', async (req, res) => {
-  const { lat, lon } = req.query;
-  if (lat && lon) {
-    const city = await getCityFromLatLon(lat, lon);
-    return res.json({ city, source: "GPS", lat, lon });
+// Webhook receiver - Bina App Khole Auto Update
+app.post("/webhook", (req, res) => {
+  const msg = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+  if (msg) {
+    const id = msg.interactive?.button_reply?.id || "";
+    const from = msg.from;
+    console.log("Click:", id, from);
+    if (id.startsWith("AVAILABLE_")) {
+      let wid = id.split("_")[1];
+      workers = workers.map(w => w.id == wid ? { ...w, isAvailable: true, lastUpdate: Date.now() } : w);
+    }
+    if (id.startsWith("BUSY_")) {
+      let wid = id.split("_")[1];
+      workers = workers.map(w => w.id == wid ? { ...w, isAvailable: false, lastUpdate: Date.now() } : w);
+    }
+    if (id.startsWith("YES_")) {
+      let shortId = id.split("_")[1];
+      requirements = requirements.filter(r => !r.id.includes(shortId));
+    }
   }
-  const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.ip;
-  const city = await getCityFromIP(ip);
-  res.json({ city, ip, source: "IP" });
+  res.sendStatus(200);
 });
 
-// --- OTP WITH CITY ---
-app.post('/send-otp', async (req, res) => {
-  const { phone, city, lat, lon } = req.body;
-  let finalCity = city;
-
-  if (!finalCity && lat && lon) {
-    finalCity = await getCityFromLatLon(lat, lon);
-  }
-  if (!finalCity) {
-    const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.ip;
-    finalCity = await getCityFromIP(ip);
-  }
-
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  users[phone] = { otp, city: finalCity, time: Date.now() };
-  console.log(`OTP ${otp} for ${phone} CITY: ${finalCity}`);
-  res.json({ success: true, otp, city: finalCity });
-});
-
-app.post('/verify-otp', (req, res) => {
-  const { phone, otp } = req.body;
-  if (users[phone]?.otp == otp) {
-    res.json({ success: true, city: users[phone].city });
-  } else {
-    res.status(400).json({ error: "Invalid OTP" });
-  }
-});
-
-// --- REQUIREMENT APIs ---
-app.post('/add-requirement', (req, res) => {
-  const r = {
-    id: Date.now(),
-   ...req.body,
-    city: req.body.city || users[req.body.customerPhone]?.city || "Unknown",
-    date: new Date().toLocaleDateString(),
-    createdAt: Date.now(),
-    isCompleted: false
-  };
-  requirements.push(r);
-  res.json({ success: true, data: r });
-});
-
-app.get('/requirements', (req, res) => {
-  const { city } = req.query;
-  if (city) {
-    return res.json(requirements.filter(r => r.city.toLowerCase() === city.toLowerCase()));
-  }
-  res.json(requirements);
-});
-
-app.get('/dashboard/:city', (req, res) => {
-  const city = req.params.city;
-  const filtered = requirements.filter(r => r.city.toLowerCase() === city.toLowerCase());
-  res.json({ city, total: filtered.length, data: filtered });
-});
-
-// --- 8 AM & 2 PM - Available/Busy (bina app khole) ---
-cron.schedule('30 2 * * *', () => { // 8 AM IST = 2:30 AM UTC
-  console.log("8 AM Cron Running");
-  workers.forEach(w => {
-    sendMessage(w.phone, `Hi ${w.name} (${w.city}), Aaj Available ho?`, [
-      { type: "reply", reply: { id: `AVAILABLE ${w.id}`, title: "Available 🟢" } },
-      { type: "reply", reply: { id: `BUSY ${w.id}`, title: "Busy 🔴" } }
-    ]);
+// 2. Home Repair 8AM & 2PM IST
+cron.schedule("0 8 * * *", () => {
+  console.log("8AM Job");
+  workers.filter(w => w.serviceType === "Home Repair").forEach(w => {
+    sendMessage(w.phone, `Hi ${w.name}! Ezi Services\nAap abhi Available ho ya Busy?`, [{ id: `AVAILABLE_${w.id}`, title: "✅ Available" }, { id: `BUSY_${w.id}`, title: "❌ Busy" }]);
   });
 }, { timezone: "Asia/Kolkata" });
 
-cron.schedule('30 8 * * *', () => { // 2 PM IST = 8:30 AM UTC
-  console.log("2 PM Cron Running");
-  workers.forEach(w => {
-    sendMessage(w.phone, `Afternoon Check ${w.name}, Available ho?`, [
-      { type: "reply", reply: { id: `AVAILABLE ${w.id}`, title: "Available 🟢" } },
-      { type: "reply", reply: { id: `BUSY ${w.id}`, title: "Busy 🔴" } }
-    ]);
+cron.schedule("0 14 * * *", () => {
+  workers.filter(w => w.serviceType === "Home Repair").forEach(w => {
+    sendMessage(w.phone, `Hi ${w.name}! Ezi Services\nAap abhi Available ho ya Busy?`, [{ id: `AVAILABLE_${w.id}`, title: "✅ Available" }, { id: `BUSY_${w.id}`, title: "❌ Busy" }]);
   });
 }, { timezone: "Asia/Kolkata" });
 
-// --- 9 AM - Requirement Check + Auto Date Update ---
-cron.schedule('30 3 * * *', () => { // 9 AM IST = 3:30 AM UTC
-  console.log("9 AM Requirement Cron");
+// 3. Home Care & Commercial - Sunday 9AM
+cron.schedule("0 9 * * 0", () => {
+  workers.filter(w => w.serviceType !== "Home Repair").forEach(w => {
+    sendMessage(w.phone, `Hi ${w.name}! Sunday ke liye Available ho?`, [{ id: `AVAILABLE_${w.id}`, title: "✅ Available" }, { id: `BUSY_${w.id}`, title: "❌ Busy" }]);
+  });
+}, { timezone: "Asia/Kolkata" });
+
+// 4. Requirement Daily 9AM + Date Auto Update + 24hr Auto Delete
+cron.schedule("0 9 * * *", () => {
   requirements.forEach(r => {
-    r.date = new Date().toLocaleDateString(); // Auto date update
     if (!r.isCompleted) {
-      sendMessage(r.customerPhone, `Aapki ${r.category} requirement ${r.city} me complete hui?`, [
-        { type: "reply", reply: { id: `YES ${r.id}`, title: "YES Complete" } },
-        { type: "reply", reply: { id: `NO ${r.id}`, title: "NO Pending" } }
-      ]);
+      sendMessage(r.customerPhone, `Aapki ${r.category} requirement complete ho gayi?`, [{ id: `YES_${r.id.slice(0, 8)}`, title: "✅ YES" }, { id: `NO_${r.id.slice(0, 8)}`, title: "❌ NO" }]);
+      r.lastUpdated = Date.now(); // Date auto update
     }
   });
+  // 24hr baad number delete
+  const now = Date.now();
+  requirements = requirements.filter(r => now - r.paidAt < 24 * 60 * 60 * 1000 || !r.paidAt);
 }, { timezone: "Asia/Kolkata" });
 
-// --- Auto 24hr Delete ---
-setInterval(() => {
-  const now = Date.now();
-  const before = requirements.length;
-  requirements = requirements.filter(r => (now - r.createdAt) < 24 * 60 * 60 * 1000);
-  if (before!== requirements.length) console.log(`Auto Deleted ${before - requirements.length} requirements`);
-}, 60 * 60 * 1000);
-
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log("Ezi LIVE on " + PORT));
+app.listen(3000, () => console.log("Server running"));
