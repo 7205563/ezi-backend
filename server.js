@@ -8,9 +8,7 @@ app.use(bodyParser.json());
 
 // Firebase
 const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
 const VERIFY_TOKEN = "ezi123";
@@ -19,76 +17,51 @@ const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 
 app.get('/', (req,res)=> res.send('Ezi Backend Live'));
 
-// Webhook Verify
-app.get('/webhook', (req,res)=>{
-  if(req.query['hub.verify_token'] === VERIFY_TOKEN){
-    res.send(req.query['hub.challenge']);
-  } else {
-    res.sendStatus(403);
-  }
+// OTP Bhejne ka API
+app.post('/send-otp', async (req,res)=>{
+  const {phone, otp} = req.body;
+  try {
+    await axios.post(`https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/messages`,{
+      messaging_product:"whatsapp",
+      to:"91"+phone,
+      type:"template",
+      template:{name:"ezi_otp", language:{code:"en"}, components:[{type:"body", parameters:[{type:"text", text:otp}]}]}
+    },{headers:{Authorization:`Bearer ${WHATSAPP_TOKEN}`}});
+    res.json({ok:true});
+  } catch(e){ res.status(500).json({error:e.response?.data||e.message}); }
 });
 
-// Webhook Receive - BUTTON CLICK
+// Webhook Verify - Yahi se Meta Verify karega
+app.get('/webhook', (req,res)=>{
+  if(req.query['hub.verify_token']===VERIFY_TOKEN){
+    res.send(req.query['hub.challenge']);
+  } else res.sendStatus(403);
+});
+
+// Webhook Receive - User jab Available/Busy/Yes dabayega
 app.post('/webhook', async (req,res)=>{
-  console.log("WEBHOOK AAYA:", JSON.stringify(req.body).substring(0,500));
   try{
-    const entry = req.body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-    const messages = value?.messages;
-    if(messages && messages[0]){
-      const msg = messages[0];
-      const from = msg.from; // worker phone
-      let reply = "";
-      if(msg.button && msg.button.text) reply = msg.button.text;
-      if(msg.interactive && msg.interactive.button_reply) reply = msg.interactive.button_reply.title;
+    const msg = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+    if(!msg) return res.sendStatus(200);
+    const from = msg.from.replace("91","");
+    const reply = (msg.button?.text || msg.text?.body || "").toUpperCase();
+    console.log("Reply from", from, reply);
 
-      console.log(`From: ${from} Button: ${reply}`);
+    const snap = await db.collection("workers").doc(from).get();
+    const fcmToken = snap.exists? snap.data().fcmToken : null;
 
-      // Find worker and update
-      const workers = await db.collection('workers').where('phone','==',from).get();
-      if(!workers.empty){
-        let availability = reply.toLowerCase().includes('avail')? 'Available' : 'Busy';
-        await workers.docs[0].ref.update({
-          availability: availability,
-          isAvailable: availability === 'Available',
-          lastUpdated: new Date()
-        });
-        console.log(`Updated ${from} to ${availability}`);
+    if(reply.includes("AVAILABLE") || reply.includes("BUSY")){
+      await db.collection("workers").doc(from).set({isAvailable: reply.includes("AVAILABLE"), lastStatusUpdate: Date.now()}, {merge:true});
+      if(fcmToken){
+        await admin.messaging().send({token:fcmToken, data:{action:reply}});
       }
     }
-  }catch(e){ console.log("Error:", e.message); }
-  res.sendStatus(200);
-});
-
-// Check Availability - Sends WhatsApp to all workers
-app.get('/check-availability', async (req,res)=>{
-  try{
-    const workersSnap = await db.collection('workers').get();
-    for(const doc of workersSnap.docs){
-      const w = doc.data();
-      if(!w.phone) continue;
-      await axios.post(`https://graph.facebook.com/v20.0/${PHONE_NUMBER_ID}/messages`,{
-        messaging_product:"whatsapp",
-        to: w.phone,
-        type:"interactive",
-        interactive:{
-          type:"button",
-          body:{ text:`Hi ${w.name || 'Test Worker'}! Aaj available ho?` },
-          action:{ buttons:[
-            {type:"reply", reply:{id:"avail_yes", title:"✅ Available"}},
-            {type:"reply", reply:{id:"avail_no", title:"❌ Busy"}}
-          ]}
-        }
-      },{
-        headers:{ Authorization:`Bearer ${WHATSAPP_TOKEN}`, 'Content-Type':'application/json' }
-      });
+    if(reply.includes("YES")){
+      const reqSnap = await db.collection("requirements").where("phone","==",from).get();
+      reqSnap.forEach(d=>d.ref.delete());
     }
-    res.send("Messages sent to all workers");
-  }catch(e){
-    console.log(e.response?.data || e.message);
-    res.status(500).send(e.message);
-  }
+    res.sendStatus(200);
+  } catch(e){ console.log(e); res.sendStatus(200); }
 });
 
-app.listen(10000, ()=> console.log("Server on 10000"));
+app.listen(10000, ()=> console.log("Ezi Backend Running"));
