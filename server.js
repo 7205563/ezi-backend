@@ -25,7 +25,11 @@ app.post('/send-otp', async (req,res)=>{
       messaging_product:"whatsapp",
       to:"91"+phone,
       type:"template",
-      template:{name:"ezi_otp", language:{code:"en"}, components:[{type:"body", parameters:[{type:"text", text:otp}]}]}
+      template:{
+  name:"ezi_otp", 
+  language:{code:"en_US"}, 
+  components:[{type:"body", parameters:[{type:"text", text: otp }]}]
+}
     },{headers:{Authorization:`Bearer ${WHATSAPP_TOKEN}`}});
     res.json({ok:true});
   } catch(e){ res.status(500).json({error:e.response?.data||e.message}); }
